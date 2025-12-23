@@ -1,0 +1,4 @@
+NODE_ENV=development
+PORT=3000
+JWT_SECRET=my_super_secret
+STRIPE_SECRET=sk_test_your_secret_here
