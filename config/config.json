@@ -9,9 +9,10 @@
     "storage": "./database_test.sqlite"
   },
   "production": {
-    "use_env_variable": "DATABASE_URL",
-    "dialect": "postgres"
-  }
+  "dialect": "sqlite",
+  "storage": "/tmp/micro_fixer.sqlite",
+  "logging": false
+}
 }
 
 

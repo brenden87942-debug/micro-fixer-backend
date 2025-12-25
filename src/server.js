@@ -11,7 +11,23 @@ const adminRoutes = require('./routes/admin');
 const { initSocket } = require('./socket');
 
 const app = express();
-app.use(cors({ origin: "http://localhost:5173" }));
+const allowedOrigins = [
+  "http://localhost:5173",
+  "http://127.0.0.1:5173",
+  "https://lucent-douhua-947ac5.netlify.app",
+];
+
+app.use(
+  cors({
+    origin: (origin, cb) => {
+      if (!origin) return cb(null, true); // allows curl/postman + server-to-server
+      if (allowedOrigins.includes(origin)) return cb(null, true);
+      return cb(new Error("CORS blocked"));
+    },
+    credentials: true,
+  })
+);
+
 app.use(bodyParser.json());
 
 app.use('/api/auth', authRoutes);
