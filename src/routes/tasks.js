@@ -21,12 +21,9 @@ function distanceKm(lat1, lng1, lat2, lng2) {
   return R * c;
 }
 
-// Helpers
 function requireWorker(req, res, next) {
   if (!req.user) return res.status(401).json({ ok: false, error: "Unauthorized" });
-  if (req.user.role !== "worker") {
-    return res.status(403).json({ ok: false, error: "Not worker" });
-  }
+  if (req.user.role !== "worker") return res.status(403).json({ ok: false, error: "Not worker" });
   next();
 }
 
@@ -60,113 +57,87 @@ router.post("/", authenticate, async (req, res) => {
  * GET /api/tasks/mine
  */
 router.get("/mine", authenticate, async (req, res) => {
-  try {
-    const tasks = await Task.findAll({
-      where: { userId: req.user.id },
-      order: [["updatedAt", "DESC"]],
-    });
-    res.json({ ok: true, tasks });
-  } catch (e) {
-    res.status(500).json({ ok: false, error: "Server error" });
-  }
+  const tasks = await Task.findAll({
+    where: { userId: req.user.id },
+    order: [["updatedAt", "DESC"]],
+    limit: 100,
+  });
+  res.json({ ok: true, tasks });
 });
 
 /**
- * WORKER: list available tasks (requested only), with scoring
+ * WORKER: available tasks (requested only) with scoring
  * GET /api/tasks/available
  */
 router.get("/available", authenticate, requireWorker, async (req, res) => {
-  try {
-    const allTasks = await Task.findAll({ where: { status: "requested" } });
+  const allTasks = await Task.findAll({ where: { status: "requested" } });
 
-    const workerLat = req.user.locationLat;
-    const workerLng = req.user.locationLng;
-    const workerSkills = (req.user.skills || "")
-      .split(",")
-      .map((s) => s.trim().toLowerCase())
-      .filter(Boolean);
+  const workerLat = req.user.locationLat;
+  const workerLng = req.user.locationLng;
+  const workerSkills = (req.user.skills || "")
+    .split(",")
+    .map((s) => s.trim().toLowerCase())
+    .filter(Boolean);
 
-    const scored = allTasks.map((task) => {
-      let dist = 9999;
-      if (
-        workerLat != null &&
-        workerLng != null &&
-        task.lat != null &&
-        task.lng != null
-      ) {
-        dist = distanceKm(workerLat, workerLng, task.lat, task.lng);
-      }
+  const scored = allTasks.map((task) => {
+    let dist = 9999;
+    if (workerLat != null && workerLng != null && task.lat != null && task.lng != null) {
+      dist = distanceKm(workerLat, workerLng, task.lat, task.lng);
+    }
 
-      const skillMatch =
-        workerSkills.length && task.category
-          ? workerSkills.includes(String(task.category).toLowerCase())
-          : false;
+    const skillMatch =
+      workerSkills.length && task.category
+        ? workerSkills.includes(String(task.category).toLowerCase())
+        : false;
 
-      let score = 0;
-      score -= dist;
-      if (skillMatch) score += 10;
+    let score = 0;
+    score -= dist;
+    if (skillMatch) score += 10;
 
-      return { task, dist, score };
-    });
+    return { task, dist, score };
+  });
 
-    scored.sort((a, b) => b.score - a.score);
+  scored.sort((a, b) => b.score - a.score);
 
-    res.json({
-      ok: true,
-      tasks: scored.map((s) => ({
-        ...s.task.toJSON(),
-        distance_km: s.dist,
-        score: s.score,
-      })),
-    });
-  } catch (e) {
-    console.error(e);
-    res.status(500).json({ ok: false, error: "Server error" });
-  }
+  res.json({
+    ok: true,
+    tasks: scored.map((s) => ({
+      ...s.task.toJSON(),
+      distance_km: s.dist,
+      score: s.score,
+    })),
+  });
 });
 
 /**
- * WORKER: list my active jobs (assigned + in_progress)
+ * WORKER: my jobs (assigned + in_progress)
  * GET /api/tasks/assigned
  */
 router.get("/assigned", authenticate, requireWorker, async (req, res) => {
-  try {
-    const tasks = await Task.findAll({
-      where: {
-        workerId: req.user.id,
-        status: ["assigned", "in_progress"],
-      },
-      order: [["updatedAt", "DESC"]],
-      limit: 50,
-    });
-    res.json({ ok: true, tasks });
-  } catch (e) {
-    console.error(e);
-    res.status(500).json({ ok: false, error: "Server error" });
-  }
+  const tasks = await Task.findAll({
+    where: { workerId: req.user.id, status: ["assigned", "in_progress"] },
+    order: [["updatedAt", "DESC"]],
+    limit: 100,
+  });
+  res.json({ ok: true, tasks });
 });
 
 /**
  * WORKER: history (completed + cancelled)
  * GET /api/tasks/history
- *
- * IMPORTANT: must be above /:id
  */
 router.get("/history", authenticate, requireWorker, async (req, res) => {
-  try {
-    const tasks = await Task.findAll({
-      where: {
-        workerId: req.user.id,
-        status: ["completed", "cancelled"],
-      },
-      order: [["updatedAt", "DESC"]],
-      limit: 50,
-    });
-    res.json({ ok: true, tasks });
-  } catch (e) {
-    console.error(e);
-    res.status(500).json({ ok: false, error: "Server error" });
-  }
+  const tasks = await Task.findAll({
+    where: { workerId: req.user.id, status: ["completed", "cancelled"] },
+    order: [["updatedAt", "DESC"]],
+    limit: 200,
+  });
+
+  const totalEarnedCents = tasks
+    .filter((t) => t.status === "completed")
+    .reduce((sum, t) => sum + Number(t.price_cents || 0), 0);
+
+  res.json({ ok: true, tasks, totalEarnedCents });
 });
 
 /**
@@ -174,99 +145,67 @@ router.get("/history", authenticate, requireWorker, async (req, res) => {
  * POST /api/tasks/:id/accept
  */
 router.post("/:id/accept", authenticate, requireWorker, async (req, res) => {
-  try {
-    const task = await Task.findByPk(req.params.id);
-    if (!task) return res.status(404).json({ ok: false, error: "Not found" });
-    if (task.status !== "requested") {
-      return res.status(400).json({ ok: false, error: "Already taken" });
-    }
+  const task = await Task.findByPk(req.params.id);
+  if (!task) return res.status(404).json({ ok: false, error: "Not found" });
+  if (task.status !== "requested") return res.status(400).json({ ok: false, error: "Already taken" });
 
-    task.workerId = req.user.id;
-    task.status = "assigned";
-    await task.save();
+  task.workerId = req.user.id;
+  task.status = "assigned";
+  await task.save();
 
-    emit("task:accepted", {
-      taskId: task.id,
-      userId: task.userId,
-      workerId: task.workerId,
-    });
+  emit("task:accepted", { taskId: task.id, userId: task.userId, workerId: task.workerId });
 
-    res.json({ ok: true, task });
-  } catch (e) {
-    console.error(e);
-    res.status(500).json({ ok: false, error: "Server error" });
-  }
+  res.json({ ok: true, task });
 });
 
 /**
- * WORKER: start a task (assigned -> in_progress)
+ * WORKER: start (assigned -> in_progress)
  * POST /api/tasks/:id/start
  */
 router.post("/:id/start", authenticate, requireWorker, async (req, res) => {
-  try {
-    const task = await Task.findByPk(req.params.id);
-    if (!task) return res.status(404).json({ ok: false, error: "Not found" });
-    if (task.workerId !== req.user.id) {
-      return res.status(403).json({ ok: false, error: "Not your task" });
-    }
-    if (task.status !== "assigned") {
-      return res.status(400).json({ ok: false, error: "Task not in assigned state" });
-    }
+  const task = await Task.findByPk(req.params.id);
+  if (!task) return res.status(404).json({ ok: false, error: "Not found" });
+  if (task.workerId !== req.user.id) return res.status(403).json({ ok: false, error: "Not your task" });
+  if (task.status !== "assigned") return res.status(400).json({ ok: false, error: "Task not in assigned state" });
 
-    task.status = "in_progress";
-    await task.save();
+  task.status = "in_progress";
+  await task.save();
 
-    emit("task:started", { taskId: task.id, workerId: task.workerId });
+  emit("task:started", { taskId: task.id, workerId: task.workerId });
 
-    res.json({ ok: true, task });
-  } catch (e) {
-    console.error(e);
-    res.status(500).json({ ok: false, error: "Server error" });
-  }
+  res.json({ ok: true, task });
 });
 
 /**
- * WORKER: complete a task (assigned OR in_progress -> completed)
+ * WORKER: complete (in_progress|assigned -> completed)
  * POST /api/tasks/:id/complete
  */
 router.post("/:id/complete", authenticate, requireWorker, async (req, res) => {
-  try {
-    const task = await Task.findByPk(req.params.id);
-    if (!task) return res.status(404).json({ ok: false, error: "Not found" });
-    if (task.workerId !== req.user.id) {
-      return res.status(403).json({ ok: false, error: "Not your task" });
-    }
-    if (task.status !== "in_progress" && task.status !== "assigned") {
-      return res.status(400).json({ ok: false, error: "Task not active" });
-    }
-
-    task.status = "completed";
-    await task.save();
-
-    emit("task:completed", { taskId: task.id, workerId: task.workerId });
-
-    res.json({ ok: true, task });
-  } catch (e) {
-    console.error(e);
-    res.status(500).json({ ok: false, error: "Server error" });
+  const task = await Task.findByPk(req.params.id);
+  if (!task) return res.status(404).json({ ok: false, error: "Not found" });
+  if (task.workerId !== req.user.id) return res.status(403).json({ ok: false, error: "Not your task" });
+  if (task.status !== "in_progress" && task.status !== "assigned") {
+    return res.status(400).json({ ok: false, error: "Task not active" });
   }
+
+  task.status = "completed";
+  await task.save();
+
+  emit("task:completed", { taskId: task.id, workerId: task.workerId });
+
+  res.json({ ok: true, task });
 });
 
 /**
- * AUTHED: get single task
+ * AUTHED: get single
  * GET /api/tasks/:id
  */
 router.get("/:id", authenticate, async (req, res) => {
-  try {
-    const task = await Task.findByPk(req.params.id, {
-      include: [{ model: User, as: "user" }, { model: User, as: "worker" }],
-    });
-    if (!task) return res.status(404).json({ ok: false, error: "Not found" });
-    res.json({ ok: true, task });
-  } catch (e) {
-    console.error(e);
-    res.status(500).json({ ok: false, error: "Server error" });
-  }
+  const task = await Task.findByPk(req.params.id, {
+    include: [{ model: User, as: "user" }, { model: User, as: "worker" }],
+  });
+  if (!task) return res.status(404).json({ ok: false, error: "Not found" });
+  res.json({ ok: true, task });
 });
 
 module.exports = router;
