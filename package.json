@@ -3,6 +3,7 @@
   "version": "1.0.0",
   "main": "src/server.js",
   "scripts": {
+    "postinstall": "npm rebuild sqlite3 --build-from-source",
     "start": "node src/server.js",
     "dev": "nodemon src/server.js",
     "migrate": "npx sequelize db:migrate"
