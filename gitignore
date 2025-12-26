@@ -1,5 +1,0 @@
-node_modules/
-database.sqlite
-database_test.sqlite
-*.sqlite
-.env
