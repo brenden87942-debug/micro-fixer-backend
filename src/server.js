@@ -47,17 +47,29 @@ app.use("/api/admin", adminRoutes);
 const server = http.createServer(app);
 initSocket(server);
 
-// IMPORTANT: Railway provides PORT
 const PORT = process.env.PORT || 3000;
 
-sequelize
-  .sync()
-  .then(() => {
-    server.listen(PORT, "0.0.0.0", () => {
-      console.log("Backend running on port", PORT);
-    });
-  })
-  .catch((err) => {
-    console.error("Sequelize sync failed:", err);
-    process.exit(1);
-  });
+// Health + root MUST be registered before listen
+let dbReady = false;
+
+app.get("/", (req, res) => res.json({ ok: true, service: "micro-fixer-backend" }));
+app.get("/health", (req, res) =>
+  res.json({ ok: true, service: "micro-fixer-backend", dbReady })
+);
+
+// ✅ IMPORTANT: Start listening immediately (so Railway stops 502’ing)
+server.listen(PORT, "0.0.0.0", () => {
+  console.log("Backend running on port", PORT);
+});
+
+// ✅ Connect DB AFTER server is already up
+(async () => {
+  try {
+    await sequelize.authenticate();
+    await sequelize.sync();
+    dbReady = true;
+    console.log("DB ready ✅");
+  } catch (err) {
+    console.error("DB init failed ❌", err);
+  }
+})();
