@@ -1,4 +1,5 @@
 require("dotenv").config();
+
 const express = require("express");
 const bodyParser = require("body-parser");
 const cors = require("cors");
@@ -13,19 +14,19 @@ const { initSocket } = require("./socket");
 
 const app = express();
 
-/**
- * CORS (safe dev default):
- * - allows localhost + any netlify preview
- * - allows curl/postman (no origin)
- */
+// ✅ CORS: allow localhost + your Netlify site + curl (no origin)
+const allowedOrigins = [
+  "http://localhost:5173",
+  "http://127.0.0.1:5173",
+  "https://lucent-douhua-947ac5.netlify.app",
+];
+
 app.use(
   cors({
     origin: (origin, cb) => {
       if (!origin) return cb(null, true);
-      if (origin === "http://localhost:5173") return cb(null, true);
-      if (origin === "http://127.0.0.1:5173") return cb(null, true);
-      if (origin.endsWith(".netlify.app")) return cb(null, true);
-      return cb(null, true); // (dev-friendly) if you want strict later, we’ll lock it down
+      if (allowedOrigins.includes(origin)) return cb(null, true);
+      return cb(new Error("CORS blocked"));
     },
     credentials: true,
   })
@@ -33,7 +34,7 @@ app.use(
 
 app.use(bodyParser.json());
 
-// Health checks (for Railway + sanity)
+// ✅ Always respond (Railway needs this)
 app.get("/", (req, res) => res.json({ ok: true, service: "micro-fixer-backend" }));
 app.get("/health", (req, res) => res.json({ ok: true, service: "micro-fixer-backend" }));
 
@@ -43,33 +44,27 @@ app.use("/api/tasks", taskRoutes);
 app.use("/api/payments", paymentRoutes);
 app.use("/api/admin", adminRoutes);
 
-// Create server + sockets
+// Server + sockets
 const server = http.createServer(app);
 initSocket(server);
 
+// ✅ IMPORTANT: listen immediately for Railway
 const PORT = process.env.PORT || 3000;
 
-// Health + root MUST be registered before listen
-let dbReady = false;
-
-app.get("/", (req, res) => res.json({ ok: true, service: "micro-fixer-backend" }));
-app.get("/health", (req, res) =>
-  res.json({ ok: true, service: "micro-fixer-backend", dbReady })
-);
-
-// ✅ IMPORTANT: Start listening immediately (so Railway stops 502’ing)
-server.listen(PORT, "0.0.0.0", () => {
+server.listen(PORT, () => {
   console.log("Backend running on port", PORT);
 });
 
-// ✅ Connect DB AFTER server is already up
+// ✅ DB init happens AFTER listen so /health still works
 (async () => {
   try {
-    await sequelize.authenticate();
     await sequelize.sync();
-    dbReady = true;
-    console.log("DB ready ✅");
+    console.log("Sequelize synced ✅");
   } catch (err) {
-    console.error("DB init failed ❌", err);
+    console.error("Sequelize sync failed ❌", err);
   }
 })();
+
+// Optional: log crashes instead of silent death
+process.on("unhandledRejection", (err) => console.error("unhandledRejection", err));
+process.on("uncaughtException", (err) => console.error("uncaughtException", err));
