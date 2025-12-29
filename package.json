@@ -3,10 +3,13 @@
   "version": "1.0.0",
   "main": "src/server.js",
   "scripts": {
-    "postinstall": "npm rebuild sqlite3 --build-from-source",
     "start": "node src/server.js",
     "dev": "nodemon src/server.js",
     "migrate": "npx sequelize db:migrate"
+  },
+  "engines": {
+    "node": "20.x",
+    "npm": "10.x"
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",
