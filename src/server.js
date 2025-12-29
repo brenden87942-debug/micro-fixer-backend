@@ -1,5 +1,4 @@
 require("dotenv").config();
-
 const express = require("express");
 const bodyParser = require("body-parser");
 const cors = require("cors");
@@ -14,7 +13,7 @@ const { initSocket } = require("./socket");
 
 const app = express();
 
-// ✅ CORS: allow localhost + your Netlify site + curl (no origin)
+// --- CORS ---
 const allowedOrigins = [
   "http://localhost:5173",
   "http://127.0.0.1:5173",
@@ -24,9 +23,9 @@ const allowedOrigins = [
 app.use(
   cors({
     origin: (origin, cb) => {
-      if (!origin) return cb(null, true);
+      if (!origin) return cb(null, true); // curl/postman/server-to-server
       if (allowedOrigins.includes(origin)) return cb(null, true);
-      return cb(new Error("CORS blocked"));
+      return cb(null, true); // TEMP: don't block during deploy debugging
     },
     credentials: true,
   })
@@ -34,37 +33,31 @@ app.use(
 
 app.use(bodyParser.json());
 
-// ✅ Always respond (Railway needs this)
-app.get("/", (req, res) => res.json({ ok: true, service: "micro-fixer-backend" }));
-app.get("/health", (req, res) => res.json({ ok: true, service: "micro-fixer-backend" }));
+// --- Health endpoints (Railway needs something fast) ---
+app.get("/", (req, res) => res.status(200).json({ ok: true, service: "micro-fixer-backend" }));
+app.get("/health", (req, res) => res.status(200).json({ ok: true, service: "micro-fixer-backend" }));
 
-// Routes
+// --- Routes ---
 app.use("/api/auth", authRoutes);
 app.use("/api/tasks", taskRoutes);
 app.use("/api/payments", paymentRoutes);
 app.use("/api/admin", adminRoutes);
 
-// Server + sockets
+// --- Server ---
 const server = http.createServer(app);
 initSocket(server);
 
-// ✅ IMPORTANT: listen immediately for Railway
-const PORT = process.env.PORT || 3000;
+// IMPORTANT: Railway sets PORT. Must listen on 0.0.0.0
+const PORT = Number(process.env.PORT || 3000);
 
-server.listen(PORT, () => {
+// Start listening FIRST so Railway sees the port open,
+// then connect DB (sqlite) after.
+server.listen(PORT, "0.0.0.0", async () => {
   console.log("Backend running on port", PORT);
-});
-
-// ✅ DB init happens AFTER listen so /health still works
-(async () => {
   try {
     await sequelize.sync();
-    console.log("Sequelize synced ✅");
-  } catch (err) {
-    console.error("Sequelize sync failed ❌", err);
+    console.log("DB synced");
+  } catch (e) {
+    console.error("DB sync failed:", e?.message || e);
   }
-})();
-
-// Optional: log crashes instead of silent death
-process.on("unhandledRejection", (err) => console.error("unhandledRejection", err));
-process.on("uncaughtException", (err) => console.error("uncaughtException", err));
+});
