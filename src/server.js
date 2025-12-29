@@ -1,4 +1,5 @@
 require("dotenv").config();
+
 const express = require("express");
 const bodyParser = require("body-parser");
 const cors = require("cors");
@@ -13,7 +14,7 @@ const { initSocket } = require("./socket");
 
 const app = express();
 
-// --- CORS ---
+// CORS (add your Netlify + localhost)
 const allowedOrigins = [
   "http://localhost:5173",
   "http://127.0.0.1:5173",
@@ -23,9 +24,9 @@ const allowedOrigins = [
 app.use(
   cors({
     origin: (origin, cb) => {
-      if (!origin) return cb(null, true); // curl/postman/server-to-server
+      if (!origin) return cb(null, true); // curl/postman OK
       if (allowedOrigins.includes(origin)) return cb(null, true);
-      return cb(null, true); // TEMP: don't block during deploy debugging
+      return cb(new Error("CORS blocked"));
     },
     credentials: true,
   })
@@ -33,31 +34,31 @@ app.use(
 
 app.use(bodyParser.json());
 
-// --- Health endpoints (Railway needs something fast) ---
-app.get("/", (req, res) => res.status(200).json({ ok: true, service: "micro-fixer-backend" }));
-app.get("/health", (req, res) => res.status(200).json({ ok: true, service: "micro-fixer-backend" }));
+// health routes
+app.get("/", (req, res) => res.json({ ok: true, service: "micro-fixer-backend" }));
+app.get("/health", (req, res) => res.json({ ok: true, service: "micro-fixer-backend" }));
 
-// --- Routes ---
+// API routes
 app.use("/api/auth", authRoutes);
 app.use("/api/tasks", taskRoutes);
 app.use("/api/payments", paymentRoutes);
 app.use("/api/admin", adminRoutes);
 
-// --- Server ---
+// server + socket
 const server = http.createServer(app);
 initSocket(server);
 
-// IMPORTANT: Railway sets PORT. Must listen on 0.0.0.0
-const PORT = Number(process.env.PORT || 3000);
+const PORT = process.env.PORT || 3000;
 
-// Start listening FIRST so Railway sees the port open,
-// then connect DB (sqlite) after.
-server.listen(PORT, "0.0.0.0", async () => {
-  console.log("Backend running on port", PORT);
+(async () => {
   try {
     await sequelize.sync();
-    console.log("DB synced");
-  } catch (e) {
-    console.error("DB sync failed:", e?.message || e);
+    server.listen(PORT, "0.0.0.0", () => {
+      console.log("Backend running on port", PORT);
+      console.log("DB synced");
+    });
+  } catch (err) {
+    console.error("Startup error:", err);
+    process.exit(1);
   }
-});
+})();
