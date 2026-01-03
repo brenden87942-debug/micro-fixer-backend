@@ -3,22 +3,26 @@
 const fs = require("fs");
 const path = require("path");
 const Sequelize = require("sequelize");
-const basename = path.basename(__filename);
 
+const basename = path.basename(__filename);
 const env = process.env.NODE_ENV || "development";
 const config = require("../../config/config.json")[env];
 
 const db = {};
 
-// ✅ Use sqlite3 driver (works easiest on Windows)
-const sequelize = new Sequelize(config);
+// ✅ Sequelize expects sqlite3 when dialect is sqlite
+const sequelize = new Sequelize({
+  dialect: config.dialect,
+  storage: config.storage,
+  logging: config.logging ?? false,
+});
 
 fs.readdirSync(__dirname)
   .filter((file) => {
     return (
       file.indexOf(".") !== 0 &&
       file !== basename &&
-      (file.slice(-3) === ".js" || file.slice(-4) === ".mjs")
+      file.slice(-3) === ".js"
     );
   })
   .forEach((file) => {
