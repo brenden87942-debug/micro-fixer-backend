@@ -1,5 +1,4 @@
 require("dotenv").config();
-
 const express = require("express");
 const bodyParser = require("body-parser");
 const cors = require("cors");
@@ -14,7 +13,7 @@ const { initSocket } = require("./socket");
 
 const app = express();
 
-// CORS (add your Netlify + localhost)
+// ✅ allow localhost + your netlify
 const allowedOrigins = [
   "http://localhost:5173",
   "http://127.0.0.1:5173",
@@ -24,7 +23,7 @@ const allowedOrigins = [
 app.use(
   cors({
     origin: (origin, cb) => {
-      if (!origin) return cb(null, true); // curl/postman OK
+      if (!origin) return cb(null, true);
       if (allowedOrigins.includes(origin)) return cb(null, true);
       return cb(new Error("CORS blocked"));
     },
@@ -34,31 +33,49 @@ app.use(
 
 app.use(bodyParser.json());
 
-// health routes
-app.get("/", (req, res) => res.json({ ok: true, service: "micro-fixer-backend" }));
-app.get("/health", (req, res) => res.json({ ok: true, service: "micro-fixer-backend" }));
+let dbReady = false;
+let dbLastError = null;
 
-// API routes
+// ✅ always respond (prevents Railway 502)
+app.get("/", (req, res) =>
+  res.json({ ok: true, service: "micro-fixer-backend", dbReady })
+);
+
+app.get("/health", (req, res) =>
+  res.json({
+    ok: true,
+    service: "micro-fixer-backend",
+    dbReady,
+    dbError: dbLastError ? String(dbLastError) : null,
+  })
+);
+
 app.use("/api/auth", authRoutes);
 app.use("/api/tasks", taskRoutes);
 app.use("/api/payments", paymentRoutes);
 app.use("/api/admin", adminRoutes);
 
-// server + socket
 const server = http.createServer(app);
 initSocket(server);
 
 const PORT = process.env.PORT || 3000;
 
-(async () => {
+// ✅ start server FIRST
+server.listen(PORT, () => console.log("Backend running on port", PORT));
+
+// ✅ DB connect retries in background (no crash)
+async function initDb() {
   try {
+    await sequelize.authenticate();
     await sequelize.sync();
-    server.listen(PORT, "0.0.0.0", () => {
-      console.log("Backend running on port", PORT);
-      console.log("DB synced");
-    });
-  } catch (err) {
-    console.error("Startup error:", err);
-    process.exit(1);
+    dbReady = true;
+    dbLastError = null;
+    console.log("DB synced");
+  } catch (e) {
+    dbReady = false;
+    dbLastError = e?.message || e;
+    console.error("DB init error:", e?.message || e);
+    setTimeout(initDb, 5000); // retry every 5 sec
   }
-})();
+}
+initDb();
