@@ -28,6 +28,29 @@ function requireWorker(req, res, next) {
 }
 
 /**
+ * WORKER: update current location (for matching / tracking later)
+ * POST /api/tasks/worker/location
+ * body: { lat, lng }
+ */
+router.post("/worker/location", authenticate, requireWorker, async (req, res) => {
+  try {
+    const { lat, lng } = req.body;
+
+    if (typeof lat !== "number" || typeof lng !== "number") {
+      return res.status(400).json({ ok: false, error: "lat and lng must be numbers" });
+    }
+
+    req.user.locationLat = lat;
+    req.user.locationLng = lng;
+    await req.user.save();
+
+    res.json({ ok: true, workerId: req.user.id, lat, lng });
+  } catch (e) {
+    res.status(400).json({ ok: false, error: e.message });
+  }
+});
+
+/**
  * USER: create task
  * POST /api/tasks
  */
@@ -116,7 +139,7 @@ router.get("/available", authenticate, requireWorker, async (req, res) => {
 router.get("/assigned", authenticate, requireWorker, async (req, res) => {
   const tasks = await Task.findAll({
     where: { workerId: req.user.id, status: ["assigned", "in_progress"] },
-    order: [["updatedAt", "DESC"]],
+     order: [["updatedAt", "DESC"]],
     limit: 100,
   });
   res.json({ ok: true, tasks });
@@ -192,6 +215,46 @@ router.post("/:id/complete", authenticate, requireWorker, async (req, res) => {
   await task.save();
 
   emit("task:completed", { taskId: task.id, workerId: task.workerId });
+
+  res.json({ ok: true, task });
+});
+
+/**
+ * USER: delete my task (only if not taken yet)
+ * DELETE /api/tasks/:id
+ */
+router.delete("/:id", authenticate, async (req, res) => {
+  const task = await Task.findByPk(req.params.id);
+  if (!task) return res.status(404).json({ ok: false, error: "Not found" });
+  if (task.userId !== req.user.id) return res.status(403).json({ ok: false, error: "Not your task" });
+
+  // Only allow delete if nobody has accepted it yet
+  if (task.status !== "requested") {
+    return res.status(400).json({ ok: false, error: "Cannot delete after it’s accepted" });
+  }
+
+  await task.destroy();
+  emit("task:deleted", { taskId: task.id, userId: req.user.id });
+  res.json({ ok: true });
+});
+
+/**
+ * USER: cancel my task (works even if worker accepted)
+ * POST /api/tasks/:id/cancel
+ */
+router.post("/:id/cancel", authenticate, async (req, res) => {
+  const task = await Task.findByPk(req.params.id);
+  if (!task) return res.status(404).json({ ok: false, error: "Not found" });
+  if (task.userId !== req.user.id) return res.status(403).json({ ok: false, error: "Not your task" });
+
+  if (task.status === "completed") {
+    return res.status(400).json({ ok: false, error: "Cannot cancel completed task" });
+  }
+
+  task.status = "cancelled";
+  await task.save();
+
+  emit("task:cancelled", { taskId: task.id, userId: task.userId, workerId: task.workerId || null });
 
   res.json({ ok: true, task });
 });
