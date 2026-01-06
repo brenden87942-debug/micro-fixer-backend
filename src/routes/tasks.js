@@ -4,6 +4,14 @@ const { Task, User } = require("../models");
 const { authenticate } = require("../middleware/authenticate");
 const { emit } = require("../socket");
 
+// ✅ Fee settings (all in CENTS)
+const SERVICE_FEE_PERCENT = 0.1; // 10%
+
+function toInt(n, fallback = 0) {
+  const x = Number(n);
+  return Number.isFinite(x) ? Math.trunc(x) : fallback;
+}
+
 // Haversine distance in km
 function distanceKm(lat1, lng1, lat2, lng2) {
   function toRad(d) {
@@ -53,21 +61,42 @@ router.post("/worker/location", authenticate, requireWorker, async (req, res) =>
 /**
  * USER: create task
  * POST /api/tasks
+ * Stores:
+ * - price_cents (what worker earns)
+ * - fee_cents (platform fee)
+ * - total_cents (user pays)
  */
 router.post("/", authenticate, async (req, res) => {
   const { title, description, category, price_cents, lat, lng, address } = req.body;
+
   try {
+    const basePrice = toInt(price_cents, 0);
+
+    if (!title || !String(title).trim()) {
+      return res.status(400).json({ ok: false, error: "Missing title" });
+    }
+
+    if (!Number.isFinite(basePrice) || basePrice <= 0) {
+      return res.status(400).json({ ok: false, error: "price_cents must be a positive number" });
+    }
+
+    const fee_cents = Math.round(basePrice * SERVICE_FEE_PERCENT);
+    const total_cents = basePrice + fee_cents;
+
     const task = await Task.create({
       title,
       description,
       category,
-      price_cents,
+      price_cents: basePrice, // worker earns this
+      fee_cents,              // platform fee
+      total_cents,            // user pays this
       lat,
       lng,
       address,
       userId: req.user.id,
       status: "requested",
     });
+
     emit("task:new", { task });
     res.json({ ok: true, task });
   } catch (e) {
@@ -139,7 +168,7 @@ router.get("/available", authenticate, requireWorker, async (req, res) => {
 router.get("/assigned", authenticate, requireWorker, async (req, res) => {
   const tasks = await Task.findAll({
     where: { workerId: req.user.id, status: ["assigned", "in_progress"] },
-     order: [["updatedAt", "DESC"]],
+    order: [["updatedAt", "DESC"]],
     limit: 100,
   });
   res.json({ ok: true, tasks });
@@ -148,6 +177,9 @@ router.get("/assigned", authenticate, requireWorker, async (req, res) => {
 /**
  * WORKER: history (completed + cancelled)
  * GET /api/tasks/history
+ * Returns:
+ * - totalEarnedCents (sum of completed price_cents)
+ * - platformFeesCents (sum of completed fee_cents) ✅ useful for admin metrics later
  */
 router.get("/history", authenticate, requireWorker, async (req, res) => {
   const tasks = await Task.findAll({
@@ -160,7 +192,11 @@ router.get("/history", authenticate, requireWorker, async (req, res) => {
     .filter((t) => t.status === "completed")
     .reduce((sum, t) => sum + Number(t.price_cents || 0), 0);
 
-  res.json({ ok: true, tasks, totalEarnedCents });
+  const platformFeesCents = tasks
+    .filter((t) => t.status === "completed")
+    .reduce((sum, t) => sum + Number(t.fee_cents || 0), 0);
+
+  res.json({ ok: true, tasks, totalEarnedCents, platformFeesCents });
 });
 
 /**
@@ -228,7 +264,6 @@ router.delete("/:id", authenticate, async (req, res) => {
   if (!task) return res.status(404).json({ ok: false, error: "Not found" });
   if (task.userId !== req.user.id) return res.status(403).json({ ok: false, error: "Not your task" });
 
-  // Only allow delete if nobody has accepted it yet
   if (task.status !== "requested") {
     return res.status(400).json({ ok: false, error: "Cannot delete after it’s accepted" });
   }
