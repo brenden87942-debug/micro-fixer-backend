@@ -5,29 +5,23 @@ const bcrypt = require("bcryptjs");
 const { User, Task } = require("../models");
 const { authenticate } = require("../middleware/authenticate");
 
-// --- helpers ---
+// --------------------
+// ADMIN GUARD
+// --------------------
 function requireAdmin(req, res, next) {
-  if (!req.user) return res.status(401).json({ ok: false, error: "Unauthorized" });
+  if (!req.user) {
+    return res.status(401).json({ ok: false, error: "Unauthorized" });
+  }
   if (req.user.role !== "admin") {
     return res.status(403).json({ ok: false, error: "Admin only" });
   }
   next();
 }
 
-/**
- * BOOTSTRAP: create the very first admin user
- * POST /api/admin/bootstrap
- *
- * Protects itself by:
- * - requiring a secret key header
- * - only allowing bootstrap if there is NO admin user yet
- *
- * Header required:
- *   x-admin-bootstrap-key: <ADMIN_BOOTSTRAP_KEY>
- *
- * Body:
- *   { "name": "...", "email": "...", "password": "...", "phone": "..." }
- */
+// =====================================================
+// BOOTSTRAP FIRST ADMIN (ONE-TIME USE)
+// POST /api/admin/bootstrap
+// =====================================================
 router.post("/bootstrap", async (req, res) => {
   try {
     const key = req.headers["x-admin-bootstrap-key"];
@@ -72,31 +66,41 @@ router.post("/bootstrap", async (req, res) => {
       skills: null,
     });
 
-    return res.json({
+    res.json({
       ok: true,
-      admin: { id: admin.id, name: admin.name, email: admin.email, role: admin.role },
+      admin: {
+        id: admin.id,
+        name: admin.name,
+        email: admin.email,
+        role: admin.role,
+      },
     });
   } catch (e) {
     console.error(e);
-    return res.status(400).json({ ok: false, error: e.message || "Validation error" });
+    res.status(400).json({ ok: false, error: e.message });
   }
 });
 
-/**
- * ADMIN: who am I
- * GET /api/admin/me
- */
+// =====================================================
+// ADMIN: WHO AM I
+// GET /api/admin/me
+// =====================================================
 router.get("/me", authenticate, requireAdmin, async (req, res) => {
-  return res.json({
+  res.json({
     ok: true,
-    admin: { id: req.user.id, email: req.user.email, name: req.user.name, role: req.user.role },
+    admin: {
+      id: req.user.id,
+      email: req.user.email,
+      name: req.user.name,
+      role: req.user.role,
+    },
   });
 });
 
-/**
- * ADMIN: list users
- * GET /api/admin/users?limit=50&offset=0
- */
+// =====================================================
+// ADMIN: LIST USERS
+// GET /api/admin/users
+// =====================================================
 router.get("/users", authenticate, requireAdmin, async (req, res) => {
   const limit = Math.min(Number(req.query.limit || 50), 200);
   const offset = Number(req.query.offset || 0);
@@ -111,10 +115,39 @@ router.get("/users", authenticate, requireAdmin, async (req, res) => {
   res.json({ ok: true, users, limit, offset });
 });
 
-/**
- * ADMIN: list tasks
- * GET /api/admin/tasks?limit=50&offset=0
- */
+// =====================================================
+// ADMIN: CHANGE USER ROLE (OPTIONAL)
+// POST /api/admin/users/:id/role
+// =====================================================
+router.post("/users/:id/role", authenticate, requireAdmin, async (req, res) => {
+  const { role } = req.body;
+  if (!["user", "worker", "admin"].includes(role)) {
+    return res.status(400).json({ ok: false, error: "Invalid role" });
+  }
+
+  const user = await User.findByPk(req.params.id);
+  if (!user) {
+    return res.status(404).json({ ok: false, error: "User not found" });
+  }
+
+  user.role = role;
+  await user.save();
+
+  res.json({
+    ok: true,
+    user: {
+      id: user.id,
+      email: user.email,
+      name: user.name,
+      role: user.role,
+    },
+  });
+});
+
+// =====================================================
+// ADMIN: LIST TASKS
+// GET /api/admin/tasks
+// =====================================================
 router.get("/tasks", authenticate, requireAdmin, async (req, res) => {
   const limit = Math.min(Number(req.query.limit || 50), 200);
   const offset = Number(req.query.offset || 0);
@@ -132,21 +165,54 @@ router.get("/tasks", authenticate, requireAdmin, async (req, res) => {
   res.json({ ok: true, tasks, limit, offset });
 });
 
-/**
- * ADMIN: quick stats
- * GET /api/admin/stats
- */
+// =====================================================
+// ADMIN: CANCEL ANY TASK (OPTIONAL)
+// POST /api/admin/tasks/:id/cancel
+// =====================================================
+router.post("/tasks/:id/cancel", authenticate, requireAdmin, async (req, res) => {
+  const task = await Task.findByPk(req.params.id);
+  if (!task) {
+    return res.status(404).json({ ok: false, error: "Task not found" });
+  }
+
+  if (task.status === "completed") {
+    return res.status(400).json({ ok: false, error: "Cannot cancel completed task" });
+  }
+
+  task.status = "cancelled";
+  await task.save();
+
+  res.json({ ok: true, task });
+});
+
+// =====================================================
+// ADMIN: STATS + REVENUE
+// GET /api/admin/stats
+// =====================================================
 router.get("/stats", authenticate, requireAdmin, async (req, res) => {
-  const [users, workers, tasksTotal, requested, assigned, inProgress, completed] =
-    await Promise.all([
-      User.count(),
-      User.count({ where: { role: "worker" } }),
-      Task.count(),
-      Task.count({ where: { status: "requested" } }),
-      Task.count({ where: { status: "assigned" } }),
-      Task.count({ where: { status: "in_progress" } }),
-      Task.count({ where: { status: "completed" } }),
-    ]);
+  const [
+    users,
+    workers,
+    tasksTotal,
+    requested,
+    assigned,
+    inProgress,
+    completed,
+    grossCents,
+    feesCents,
+    paidToWorkersCents,
+  ] = await Promise.all([
+    User.count(),
+    User.count({ where: { role: "worker" } }),
+    Task.count(),
+    Task.count({ where: { status: "requested" } }),
+    Task.count({ where: { status: "assigned" } }),
+    Task.count({ where: { status: "in_progress" } }),
+    Task.count({ where: { status: "completed" } }),
+    Task.sum("total_cents", { where: { status: "completed" } }),
+    Task.sum("fee_cents", { where: { status: "completed" } }),
+    Task.sum("price_cents", { where: { status: "completed" } }),
+  ]);
 
   res.json({
     ok: true,
@@ -158,6 +224,9 @@ router.get("/stats", authenticate, requireAdmin, async (req, res) => {
       assigned,
       inProgress,
       completed,
+      grossCents: Number(grossCents || 0),
+      feesCents: Number(feesCents || 0),
+      paidToWorkersCents: Number(paidToWorkersCents || 0),
     },
   });
 });
