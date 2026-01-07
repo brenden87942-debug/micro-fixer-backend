@@ -31,12 +31,28 @@ app.use(
   })
 );
 
+// ----------------------------------------------------
+// ✅ STRIPE WEBHOOK MUST BE RAW (MUST COME BEFORE JSON)
+// ----------------------------------------------------
+// Your payments router should contain:
+// router.post("/webhook", express.raw({ type: "application/json" }), ...)
+// This mount ensures Stripe gets the raw body (signature verification works)
+app.post(
+  "/api/payments/webhook",
+  express.raw({ type: "application/json" }),
+  (req, res, next) => {
+    // pass to the payments router
+    next();
+  }
+);
+
+// ✅ normal JSON parsing for everything else
 app.use(bodyParser.json());
 
+// ✅ always respond (prevents Railway 502)
 let dbReady = false;
 let dbLastError = null;
 
-// ✅ always respond (prevents Railway 502)
 app.get("/", (req, res) =>
   res.json({ ok: true, service: "micro-fixer-backend", dbReady })
 );
@@ -50,9 +66,13 @@ app.get("/health", (req, res) =>
   })
 );
 
+// ✅ routes
 app.use("/api/auth", authRoutes);
 app.use("/api/tasks", taskRoutes);
+
+// IMPORTANT: This must stay AFTER the raw webhook handler above
 app.use("/api/payments", paymentRoutes);
+
 app.use("/api/admin", adminRoutes);
 
 const server = http.createServer(app);

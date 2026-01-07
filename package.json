@@ -20,10 +20,11 @@
     "jsonwebtoken": "^9.0.2",
     "pg": "^8.11.0",
     "pg-hstore": "^2.3.4",
+    "raw-body": "^3.0.2",
     "sequelize": "^6.32.1",
     "socket.io": "^4.7.2",
     "sqlite3": "^5.1.7",
-    "stripe": "^12.8.0"
+    "stripe": "^12.18.0"
   },
   "devDependencies": {
     "nodemon": "^2.0.22",
