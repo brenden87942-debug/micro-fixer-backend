@@ -87,7 +87,7 @@ server.listen(PORT, () => console.log("Backend running on port", PORT));
 async function initDb() {
   try {
     await sequelize.authenticate();
-    await sequelize.sync();
+    await sequelize.sync({ alter: true });
     dbReady = true;
     dbLastError = null;
     console.log("DB synced");
