@@ -28,7 +28,13 @@ module.exports = (sequelize, DataTypes) => {
       },
 
       status: {
-        type: DataTypes.ENUM("requested", "assigned", "in_progress", "completed", "cancelled"),
+        type: DataTypes.ENUM(
+          "requested",
+          "assigned",
+          "in_progress",
+          "completed",
+          "cancelled"
+        ),
         defaultValue: "requested",
       },
 
@@ -39,7 +45,6 @@ module.exports = (sequelize, DataTypes) => {
       stripePaymentIntentId: DataTypes.STRING,
       paidAt: DataTypes.DATE,
 
-      // ✅ COLUMNS belong here
       userId: {
         type: DataTypes.INTEGER,
         allowNull: false,
@@ -52,7 +57,6 @@ module.exports = (sequelize, DataTypes) => {
     {}
   );
 
-  // ✅ RELATIONSHIPS belong here
   Task.associate = function (models) {
     Task.belongsTo(models.User, { foreignKey: "userId", as: "user" });
     Task.belongsTo(models.User, { foreignKey: "workerId", as: "worker" });
