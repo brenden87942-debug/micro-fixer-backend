@@ -4,14 +4,6 @@ const { Task, User } = require("../models");
 const { authenticate } = require("../middleware/authenticate");
 const { emit } = require("../socket");
 
-// ✅ Fee settings (all in CENTS)
-const SERVICE_FEE_PERCENT = 0.1; // 10%
-
-function toInt(n, fallback = 0) {
-  const x = Number(n);
-  return Number.isFinite(x) ? Math.trunc(x) : fallback;
-}
-
 // Haversine distance in km
 function distanceKm(lat1, lng1, lat2, lng2) {
   function toRad(d) {
@@ -30,66 +22,71 @@ function distanceKm(lat1, lng1, lat2, lng2) {
 }
 
 function requireWorker(req, res, next) {
-  if (!req.user) return res.status(401).json({ ok: false, error: "Unauthorized" });
-  if (req.user.role !== "worker") return res.status(403).json({ ok: false, error: "Not worker" });
+  if (!req.user)
+    return res.status(401).json({ ok: false, error: "Unauthorized" });
+  if (req.user.role !== "worker")
+    return res.status(403).json({ ok: false, error: "Not worker" });
   next();
 }
 
+// ---------------
+// Worker location
+// ---------------
 /**
- * WORKER: update current location (for matching / tracking later)
+ * WORKER: update current location
  * POST /api/tasks/worker/location
  * body: { lat, lng }
  */
-router.post("/worker/location", authenticate, requireWorker, async (req, res) => {
-  try {
-    const { lat, lng } = req.body;
+router.post(
+  "/worker/location",
+  authenticate,
+  requireWorker,
+  async (req, res) => {
+    try {
+      const { lat, lng } = req.body;
 
-    if (typeof lat !== "number" || typeof lng !== "number") {
-      return res.status(400).json({ ok: false, error: "lat and lng must be numbers" });
+      if (typeof lat !== "number" || typeof lng !== "number") {
+        return res
+          .status(400)
+          .json({ ok: false, error: "lat and lng must be numbers" });
+      }
+
+      req.user.locationLat = lat;
+      req.user.locationLng = lng;
+      await req.user.save();
+
+      res.json({ ok: true, workerId: req.user.id, lat, lng });
+    } catch (e) {
+      res.status(400).json({ ok: false, error: e.message });
     }
-
-    req.user.locationLat = lat;
-    req.user.locationLng = lng;
-    await req.user.save();
-
-    res.json({ ok: true, workerId: req.user.id, lat, lng });
-  } catch (e) {
-    res.status(400).json({ ok: false, error: e.message });
   }
-});
+);
 
+// ---------------
+// Create task
+// ---------------
 /**
  * USER: create task
  * POST /api/tasks
- * Stores:
- * - price_cents (what worker earns)
- * - fee_cents (platform fee)
- * - total_cents (user pays)
  */
 router.post("/", authenticate, async (req, res) => {
-  const { title, description, category, price_cents, lat, lng, address } = req.body;
+  const { title, description, category, price_cents, lat, lng, address } =
+    req.body;
 
   try {
-    const basePrice = toInt(price_cents, 0);
+    const price = Number(price_cents || 0);
 
-    if (!title || !String(title).trim()) {
-      return res.status(400).json({ ok: false, error: "Missing title" });
-    }
-
-    if (!Number.isFinite(basePrice) || basePrice <= 0) {
-      return res.status(400).json({ ok: false, error: "price_cents must be a positive number" });
-    }
-
-    const fee_cents = Math.round(basePrice * SERVICE_FEE_PERCENT);
-    const total_cents = basePrice + fee_cents;
+    // ✅ 10% fee rule (change later if you want)
+    const fee = Math.round(price * 0.1);
+    const total = price + fee;
 
     const task = await Task.create({
       title,
       description,
       category,
-      price_cents: basePrice, // worker earns this
-      fee_cents,              // platform fee
-      total_cents,            // user pays this
+      price_cents: price,
+      fee_cents: fee,
+      total_cents: total,
       lat,
       lng,
       address,
@@ -104,6 +101,9 @@ router.post("/", authenticate, async (req, res) => {
   }
 });
 
+// ---------------
+// User tasks
+// ---------------
 /**
  * USER: list my tasks
  * GET /api/tasks/mine
@@ -117,6 +117,9 @@ router.get("/mine", authenticate, async (req, res) => {
   res.json({ ok: true, tasks });
 });
 
+// ---------------
+// Worker available
+// ---------------
 /**
  * WORKER: available tasks (requested only) with scoring
  * GET /api/tasks/available
@@ -133,7 +136,12 @@ router.get("/available", authenticate, requireWorker, async (req, res) => {
 
   const scored = allTasks.map((task) => {
     let dist = 9999;
-    if (workerLat != null && workerLng != null && task.lat != null && task.lng != null) {
+    if (
+      workerLat != null &&
+      workerLng != null &&
+      task.lat != null &&
+      task.lng != null
+    ) {
       dist = distanceKm(workerLat, workerLng, task.lat, task.lng);
     }
 
@@ -161,6 +169,9 @@ router.get("/available", authenticate, requireWorker, async (req, res) => {
   });
 });
 
+// ---------------
+// Worker assigned
+// ---------------
 /**
  * WORKER: my jobs (assigned + in_progress)
  * GET /api/tasks/assigned
@@ -174,12 +185,12 @@ router.get("/assigned", authenticate, requireWorker, async (req, res) => {
   res.json({ ok: true, tasks });
 });
 
+// ---------------
+// Worker history
+// ---------------
 /**
  * WORKER: history (completed + cancelled)
  * GET /api/tasks/history
- * Returns:
- * - totalEarnedCents (sum of completed price_cents)
- * - platformFeesCents (sum of completed fee_cents) ✅ useful for admin metrics later
  */
 router.get("/history", authenticate, requireWorker, async (req, res) => {
   const tasks = await Task.findAll({
@@ -188,26 +199,24 @@ router.get("/history", authenticate, requireWorker, async (req, res) => {
     limit: 200,
   });
 
- const totalEarnedCents = tasks
-  .filter((t) => t.status === "completed")
-  .reduce((sum, t) => sum + Number(t.price_cents || 0), 0);
+  const totalEarnedCents = tasks
+    .filter((t) => t.status === "completed")
+    .reduce((sum, t) => sum + Number(t.price_cents || 0), 0);
 
-const totalFeesCents = tasks
-  .filter((t) => t.status === "completed")
-  .reduce((sum, t) => sum + Number(t.fee_cents || 0), 0);
+  const totalFeesCents = tasks
+    .filter((t) => t.status === "completed")
+    .reduce((sum, t) => sum + Number(t.fee_cents || 0), 0);
 
-const totalChargedCents = tasks
-  .filter((t) => t.status === "completed")
-  .reduce((sum, t) => sum + Number(t.total_cents || 0), 0);
+  const totalChargedCents = tasks
+    .filter((t) => t.status === "completed")
+    .reduce((sum, t) => sum + Number(t.total_cents || 0), 0);
 
-res.json({
-  ok: true,
-  tasks,
-  totalEarnedCents,
-  totalFeesCents,
-  totalChargedCents,
+  res.json({ ok: true, tasks, totalEarnedCents, totalFeesCents, totalChargedCents });
 });
 
+// ---------------
+// Worker accept/start/complete
+// ---------------
 /**
  * WORKER: accept a task
  * POST /api/tasks/:id/accept
@@ -215,13 +224,18 @@ res.json({
 router.post("/:id/accept", authenticate, requireWorker, async (req, res) => {
   const task = await Task.findByPk(req.params.id);
   if (!task) return res.status(404).json({ ok: false, error: "Not found" });
-  if (task.status !== "requested") return res.status(400).json({ ok: false, error: "Already taken" });
+  if (task.status !== "requested")
+    return res.status(400).json({ ok: false, error: "Already taken" });
 
   task.workerId = req.user.id;
   task.status = "assigned";
   await task.save();
 
-  emit("task:accepted", { taskId: task.id, userId: task.userId, workerId: task.workerId });
+  emit("task:accepted", {
+    taskId: task.id,
+    userId: task.userId,
+    workerId: task.workerId,
+  });
 
   res.json({ ok: true, task });
 });
@@ -233,8 +247,12 @@ router.post("/:id/accept", authenticate, requireWorker, async (req, res) => {
 router.post("/:id/start", authenticate, requireWorker, async (req, res) => {
   const task = await Task.findByPk(req.params.id);
   if (!task) return res.status(404).json({ ok: false, error: "Not found" });
-  if (task.workerId !== req.user.id) return res.status(403).json({ ok: false, error: "Not your task" });
-  if (task.status !== "assigned") return res.status(400).json({ ok: false, error: "Task not in assigned state" });
+  if (task.workerId !== req.user.id)
+    return res.status(403).json({ ok: false, error: "Not your task" });
+  if (task.status !== "assigned")
+    return res
+      .status(400)
+      .json({ ok: false, error: "Task not in assigned state" });
 
   task.status = "in_progress";
   await task.save();
@@ -251,7 +269,8 @@ router.post("/:id/start", authenticate, requireWorker, async (req, res) => {
 router.post("/:id/complete", authenticate, requireWorker, async (req, res) => {
   const task = await Task.findByPk(req.params.id);
   if (!task) return res.status(404).json({ ok: false, error: "Not found" });
-  if (task.workerId !== req.user.id) return res.status(403).json({ ok: false, error: "Not your task" });
+  if (task.workerId !== req.user.id)
+    return res.status(403).json({ ok: false, error: "Not your task" });
   if (task.status !== "in_progress" && task.status !== "assigned") {
     return res.status(400).json({ ok: false, error: "Task not active" });
   }
@@ -264,6 +283,9 @@ router.post("/:id/complete", authenticate, requireWorker, async (req, res) => {
   res.json({ ok: true, task });
 });
 
+// ---------------
+// User delete/cancel
+// ---------------
 /**
  * USER: delete my task (only if not taken yet)
  * DELETE /api/tasks/:id
@@ -271,10 +293,13 @@ router.post("/:id/complete", authenticate, requireWorker, async (req, res) => {
 router.delete("/:id", authenticate, async (req, res) => {
   const task = await Task.findByPk(req.params.id);
   if (!task) return res.status(404).json({ ok: false, error: "Not found" });
-  if (task.userId !== req.user.id) return res.status(403).json({ ok: false, error: "Not your task" });
+  if (task.userId !== req.user.id)
+    return res.status(403).json({ ok: false, error: "Not your task" });
 
   if (task.status !== "requested") {
-    return res.status(400).json({ ok: false, error: "Cannot delete after it’s accepted" });
+    return res
+      .status(400)
+      .json({ ok: false, error: "Cannot delete after it’s accepted" });
   }
 
   await task.destroy();
@@ -289,27 +314,40 @@ router.delete("/:id", authenticate, async (req, res) => {
 router.post("/:id/cancel", authenticate, async (req, res) => {
   const task = await Task.findByPk(req.params.id);
   if (!task) return res.status(404).json({ ok: false, error: "Not found" });
-  if (task.userId !== req.user.id) return res.status(403).json({ ok: false, error: "Not your task" });
+  if (task.userId !== req.user.id)
+    return res.status(403).json({ ok: false, error: "Not your task" });
 
   if (task.status === "completed") {
-    return res.status(400).json({ ok: false, error: "Cannot cancel completed task" });
+    return res
+      .status(400)
+      .json({ ok: false, error: "Cannot cancel completed task" });
   }
 
   task.status = "cancelled";
   await task.save();
 
-  emit("task:cancelled", { taskId: task.id, userId: task.userId, workerId: task.workerId || null });
+  emit("task:cancelled", {
+    taskId: task.id,
+    userId: task.userId,
+    workerId: task.workerId || null,
+  });
 
   res.json({ ok: true, task });
 });
 
+// ---------------
+// Get single task
+// ---------------
 /**
  * AUTHED: get single
  * GET /api/tasks/:id
  */
 router.get("/:id", authenticate, async (req, res) => {
   const task = await Task.findByPk(req.params.id, {
-    include: [{ model: User, as: "user" }, { model: User, as: "worker" }],
+    include: [
+      { model: User, as: "user" },
+      { model: User, as: "worker" },
+    ],
   });
   if (!task) return res.status(404).json({ ok: false, error: "Not found" });
   res.json({ ok: true, task });
