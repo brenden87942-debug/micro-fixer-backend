@@ -188,15 +188,24 @@ router.get("/history", authenticate, requireWorker, async (req, res) => {
     limit: 200,
   });
 
-  const totalEarnedCents = tasks
-    .filter((t) => t.status === "completed")
-    .reduce((sum, t) => sum + Number(t.price_cents || 0), 0);
+ const totalEarnedCents = tasks
+  .filter((t) => t.status === "completed")
+  .reduce((sum, t) => sum + Number(t.price_cents || 0), 0);
 
-  const platformFeesCents = tasks
-    .filter((t) => t.status === "completed")
-    .reduce((sum, t) => sum + Number(t.fee_cents || 0), 0);
+const totalFeesCents = tasks
+  .filter((t) => t.status === "completed")
+  .reduce((sum, t) => sum + Number(t.fee_cents || 0), 0);
 
-  res.json({ ok: true, tasks, totalEarnedCents, platformFeesCents });
+const totalChargedCents = tasks
+  .filter((t) => t.status === "completed")
+  .reduce((sum, t) => sum + Number(t.total_cents || 0), 0);
+
+res.json({
+  ok: true,
+  tasks,
+  totalEarnedCents,
+  totalFeesCents,
+  totalChargedCents,
 });
 
 /**
